@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <!-- Pastikan file ini diakses melalui HTTPS -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SENDEC Secure</title>
+    <!-- Library CryptoJS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <!-- Library PeerJS -->
+    <script src="https://unpkg.com/peerjs@1.3.1/dist/peerjs.min.js"></script>
+    <!-- Library QRCode -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
+    <style>
+      button { cursor: pointer; }
+      #fileShareContainer div { border: 1px solid #ccc; margin: 5px; padding: 5px; }
+      #rs { overflow-y: auto; }
+      #previewBox { margin-top: 10px; width: 80px; height: 80px; overflow: hidden; }
+      #previewBox img, #previewBox audio { width: 100%; height: 100%; object-fit: cover; display: block; }
+      /* Dark mode styles */
+      body.dark-mode { background-color: #222; color: #eee; }
+      body.dark-mode input, body.dark-mode textarea { background-color: #333; color: #eee; }
+    </style>
+  </head>
+  <body>
+    <!-- Notifikasi Audio (sesuaikan URL jika perlu) -->
+    <audio id="notifSound" preload="auto" src="https://yourdomain.com/notification.mp3"></audio>
+    <!-- Container untuk QR Code -->
+    <div id="qrContainer" style="margin:10px; text-align:center;"></div>
+    <script>
+      (function(){
+        /* ----------------- EXPIRATION LOCKING -----------------
+           Fungsi lockExpiration() mengenkripsi tanggal expired menggunakan kunci rahasia dan menyimpannya di localStorage.
+           Fungsi checkExpiration() mendekripsi nilai tersebut dan membandingkannya dengan tanggal saat ini.
+           Jika tanggal saat ini melewati tanggal yang "terkunci", akses akan diblokir.
+           Untuk mengunci tanggal expired, jalankan: lockExpiration("2026-01-10") (misalnya dari console admin) sekali.
+        */
+        function lockExpiration(newDateStr) {
+          var secretKey = "mySecretKey123"; // Ganti dengan kunci rahasia yang lebih kompleks jika diinginkan
+          var encrypted = CryptoJS.AES.encrypt(newDateStr, secretKey).toString();
+          localStorage.setItem("lockedExpiration", encrypted);
+          console.log("Expiration date locked.");
+        }
+        function checkExpiration() {
+          var secretKey = "mySecretKey123";
+          // Jika belum di-lock, gunakan nilai default terenkripsi untuk "2026-01-10"
+          var defaultEncrypted = "U2FsdGVkX1/MrH4kPjgvbQh5KrRkL2Gnd5KzVwK8KAc=";
+          var lockedExp = localStorage.getItem("lockedExpiration") || defaultEncrypted;
+          var decryptedExpiration = CryptoJS.AES.decrypt(lockedExp, secretKey).toString(CryptoJS.enc.Utf8);
+          var expDate = new Date(decryptedExpiration);
+          if(new Date() > expDate){
+            document.body.innerHTML = "<h1 style='color:red;'>Expired. Access blocked.</h1>";
+            throw new Error("Expired");
+          }
+        }
+        checkExpiration();
+        // Contoh pemanggilan untuk mengunci tanggal (jalankan sekali):
+        // lockExpiration("2026-01-10");
+
+        /* ----------------- AUTHENTICATION ----------------- */
+        var _pw = localStorage.getItem("userPassword") || "123456";
+        var _rem = localStorage.getItem("rememberPassword") === "true";
+        if(!_rem){
+          var _up = prompt("Enter password to access the application:");
+          if(_up === null) return;
+          if(_up !== _pw){
+            document.body.innerHTML = "<h1 style='color:red;'>Incorrect password. Access denied.</h1>";
+            return;
+          }
+          if(confirm("Remember password?")){
+            localStorage.setItem("rememberPassword", "true");
+          }
+        }
+        if(localStorage.getItem("twoFactorEnabled") === "true"){
+          var _tf = prompt("Enter your 2FA code:");
+          if(_tf !== "111111"){
+            document.body.innerHTML = "<h1 style='color:red;'>Incorrect 2FA code. Access denied.</h1>";
+            return;
+          }
+        }
+
+        /* ----------------- GLOBAL VARIABLES ----------------- */
+        var expStr = "10-01-2026"; // Hanya untuk tampilan; validasi pakai lockedExpiration
+        var _pf = null, _pfT = "", CHK = 10000, incChunks = {};
+
+        /* ----------------- HELPER FUNCTIONS ----------------- */
+        function d2B(d){ var a = d.split(','); var m = a[0].match(/:(.*?);/)[1]; var b = atob(a[1]); var n = b.length, u8 = new Uint8Array(n); while(n--){ u8[n] = b.charCodeAt(n); } return new Blob([u8], {type: m}); }
+        function gB(d){ return URL.createObjectURL(d2B(d)); }
+        function playNotif(){ try { var ns = document.getElementById("notifSound"); ns.currentTime = 0; ns.play().catch(function(e){ console.error("Notification error:", e); }); } catch(e){ console.error(e); } }
+        document.body.addEventListener('click', function(){ playNotif(); }, { once: true });
+
+        /* ----------------- UI SETTINGS ----------------- */
+        var fonts = ['Arial','Courier New','Georgia','Roboto','Times New Roman','Verdana','Impact','Comic Sans MS','Lucida Console','Trebuchet MS','Garamond','Baskerville','Palatino Linotype','Futura','Didot','Optima'];
+        var colors = ['#F8F9FA','#E3F2FD','#E8F5E9','#FFF3E0','#FCE4EC','#F3E5F5'];
+        function applySet(){
+          var f = document.getElementById("fontSelect").value,
+              c = document.getElementById("colorSelect").value;
+          document.getElementById("pt").style.fontFamily = f;
+          document.getElementById("rs").style.fontFamily = f;
+          document.getElementById("pt").style.backgroundColor = c;
+          document.getElementById("rs").style.backgroundColor = c;
+          localStorage.setItem("selectedFont", f);
+          localStorage.setItem("selectedColor", c);
+        }
+
+        /* ----------------- PEERJS INIT ----------------- */
+        var conns = [], peer = new Peer({ debug:3, config:{ iceServers:[
+          { urls:"stun:stun.l.google.com:19302" },
+          { urls:"turn:numb.viagenie.ca", username:"webrtc@live.com", credential:"muazkh" }
+        ] } });
+        var myId = "";
+        peer.on("open", function(id){ myId = id; upHead(); attachPP(); });
+        peer.on("connection", function(c){
+          conns.push(c);
+          upFriend(); upConnList();
+          setupConn(c);
+          c.send({type:"historyRequest"});
+        });
+        peer.on("error", function(e){ console.error(e); });
+
+        /* ----------------- PREVIEW FUNCTIONS ----------------- */
+        function addImgPrev(pb, url, fname, mode){
+          if(mode==="sender"){
+            pb.addEventListener("click", function(){ pb.remove(); });
+            return;
+          }
+          var cnt = 0, tmr = null;
+          pb.addEventListener("click", function(){
+            cnt++;
+            if(tmr) clearTimeout(tmr);
+            tmr = setTimeout(function(){
+              if(cnt===1){
+                pb.style.width = "auto";
+                pb.style.height = "auto";
+                pb.innerHTML = '<img src="'+url+'" alt="'+fname+'" style="max-width:300px;">';
+              } else if(cnt===2){
+                var d = url.startsWith("data:")? gB(url) : url, a = document.createElement("a");
+                a.href = d; a.download = fname || "downloaded_image.png";
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                pb.remove();
+              } else if(cnt>=3){
+                pb.remove();
+              }
+              cnt = 0;
+            },300);
+          });
+        }
+        function addAudPrev(pb, url, fname, mode){
+          var cnt = 0, tmr = null;
+          pb.addEventListener("click", function(){
+            cnt++;
+            if(tmr) clearTimeout(tmr);
+            tmr = setTimeout(function(){
+              if(cnt===1){
+                pb.style.width = "auto";
+                pb.style.height = "auto";
+                pb.innerHTML = '<audio src="'+url+'" controls style="max-width:300px;"></audio>';
+              } else if(cnt===2){
+                var d = url.startsWith("data:")? gB(url) : url, a = document.createElement("a");
+                a.href = d; a.download = fname || "downloaded_audio.mp3";
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                pb.remove();
+              } else if(cnt>=3){
+                pb.remove();
+              }
+              cnt = 0;
+            },300);
+          });
+        }
+        function addDocPrev(pb, url, fname, mode){
+          var cnt = 0, tmr = null;
+          pb.addEventListener("click", function(){
+            cnt++;
+            if(tmr) clearTimeout(tmr);
+            tmr = setTimeout(function(){
+              if(cnt===1){
+                window.open(url, "_blank");
+              } else if(cnt===2){
+                var d = url.startsWith("data:")? gB(url) : url, a = document.createElement("a");
+                a.href = d; a.download = fname || "document";
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                pb.remove();
+              } else if(cnt>=3){
+                pb.remove();
+              }
+              cnt = 0;
+            },300);
+          });
+        }
+
+        /* ----------------- DESKTOP NOTIFICATION ----------------- */
+        function notifyMsg(sender){
+          if("Notification" in window){
+            if(Notification.permission === "granted"){
+              new Notification("New Message", { body: "Message from " + sender });
+            } else if(Notification.permission !== "denied"){
+              Notification.requestPermission().then(function(permission){
+                if(permission === "granted"){
+                  new Notification("New Message", { body: "Message from " + sender });
+                }
+              });
+            }
+          }
+        }
+
+        /* ----------------- CONNECTION HANDLING ----------------- */
+        function setupConn(conn){
+          if(!conn)return;
+          conn.on("open", function(){ upConnStat("Terhubung dengan: " + conn.peer); });
+          conn.on("data", function(data){
+            if(!data || !data.type) return;
+            if(data.type === "historyRequest"){
+              conn.send({ type:"historyResponse", history: document.getElementById("rs").value });
+              return;
+            }
+            if(data.type === "historyResponse"){
+              var cur = document.getElementById("rs").value;
+              document.getElementById("rs").value = cur + "\n" + data.history;
+              return;
+            }
+            var sender = data.senderName ? data.senderName : data.senderId;
+            if(data.type === "chunkStart"){ incChunks[data.senderId] = { chunks:[], total:data.total, rec:0 }; return; }
+            if(data.type === "chunk"){
+              if(!incChunks[data.senderId]){ incChunks[data.senderId] = { chunks:[], total:data.total, rec:0 }; }
+              incChunks[data.senderId].chunks[data.chunkIndex] = data.chunk;
+              incChunks[data.senderId].rec++;
+              return;
+            }
+            if(data.type === "chunkEnd"){
+              if(incChunks[data.senderId]){
+                data.type = "message";
+                data.message = incChunks[data.senderId].chunks.join("");
+                delete incChunks[data.senderId];
+              }
+            }
+            if(data.type === "file"){
+              var fn = data.fileName, ft = data.fileType, fd = data.fileData;
+              if(ft.indexOf("image/")===0){
+                var pb = document.createElement("div");
+                pb.style.width = "80px"; pb.style.height = "80px"; pb.style.border = "1px solid #ccc";
+                pb.style.marginTop = "10px"; pb.style.cursor = "pointer";
+                pb.innerHTML = "<p style='text-align:center; font-size:10px;'>[Gambar diterima]</p>";
+                document.getElementById("rs").parentNode.insertBefore(pb, document.getElementById("rs").nextSibling);
+                addImgPrev(pb, fd, fn);
+              } else if(ft.indexOf("video/")===0){
+                var cont = '<video src="'+fd+'" controls style="max-width:300px;"></video>';
+                document.getElementById("rs").value = sender + " (" + data.date + " " + data.timestamp + "):\n-----\n" + cont;
+              } else if(ft.indexOf("audio/")===0){
+                var cont = '<audio src="'+fd+'" controls style="max-width:300px;"></audio>';
+                document.getElementById("rs").value = sender + " (" + data.date + " " + data.timestamp + "):\n-----\n" + cont;
+              } else {
+                var cont = '<a href="'+fd+'" download="'+fn+'">Download '+fn+'</a>';
+                document.getElementById("rs").value = sender + " (" + data.date + " " + data.timestamp + "):\n-----\n" + cont;
+              }
+              upConnStat("File diterima dari: " + conn.peer);
+              showNotif(); playNotif();
+              document.getElementById("rs").scrollTop = document.getElementById("rs").scrollHeight;
+              notifyMsg(sender);
+              return;
+            }
+            if(data.type === "message"){
+              var mCont = data.message;
+              if(mCont.indexOf("data:image") === 0){
+                var pb = document.createElement("div");
+                pb.style.width = "80px";
+                pb.style.height = "80px";
+                pb.style.border = "1px solid #ccc";
+                pb.style.marginTop = "10px";
+                pb.style.cursor = "pointer";
+                pb.innerHTML = "<p style='text-align:center; font-size:10px;'>[Gambar dikirim]</p>";
+                document.getElementById("rs").parentNode.insertBefore(pb, document.getElementById("rs").nextSibling);
+                addImgPrev(pb, mCont, "image.png", "receiver");
+                document.getElementById("rs").value = sender + " (" + data.date + " " + data.timestamp + "):\n-----\n[Gambar dikirim]";
+              } else if(mCont.indexOf("data:audio") === 0){
+                var pb = document.createElement("div");
+                pb.style.width = "80px";
+                pb.style.height = "80px";
+                pb.style.border = "1px solid #ccc";
+                pb.style.marginTop = "10px";
+                pb.style.cursor = "pointer";
+                pb.innerHTML = "<p style='text-align:center; font-size:10px;'>[Audio dikirim]</p>";
+                document.getElementById("rs").parentNode.insertBefore(pb, document.getElementById("rs").nextSibling);
+                addAudPrev(pb, mCont, "audio.mp3", "receiver");
+                document.getElementById("rs").value = sender + " (" + data.date + " " + data.timestamp + "):\n-----\n[Audio dikirim]";
+              } else if(mCont.indexOf("data:application") === 0){
+                var pb = document.createElement("div");
+                pb.style.width = "80px";
+                pb.style.height = "80px";
+                pb.style.border = "1px solid #ccc";
+                pb.style.marginTop = "10px";
+                pb.style.cursor = "pointer";
+                pb.innerHTML = "<p style='text-align:center; font-size:10px;'>[Dokumen dikirim]</p>";
+                document.getElementById("rs").parentNode.insertBefore(pb, document.getElementById("rs").nextSibling);
+                addDocPrev(pb, mCont, "document", "receiver");
+                document.getElementById("rs").value = sender + " (" + data.date + " " + data.timestamp + "):\n-----\n[Dokumen dikirim]";
+              } else {
+                if(!mCont.startsWith("U2FsdGVk")){
+                  try{ mCont = decodeURIComponent(mCont); } catch(e){ console.error("Error decoding message:", e); }
+                }
+                document.getElementById("rs").value = sender + " (" + data.date + " " + data.timestamp + "):\n-----\n" + mCont;
+              }
+              upConnStat("Terhubung dengan: " + conn.peer);
+              showNotif(); playNotif();
+              document.getElementById("rs").scrollTop = document.getElementById("rs").scrollHeight;
+              notifyMsg(sender);
+            }
+          });
+          conn.on("close", function(){ removeConnection(conn); });
+        }
+        function removeConnection(conn){ conns = conns.filter(function(c){ return c !== conn; }); upConnList(); upFriend(); upConnStat(""); }
+        function upFriend(){ var fi = document.getElementById("friendIdInput"); if(conns.length > 0){ fi.value = conns[conns.length - 1].peer; } }
+        function upConnList(){
+          var cl = document.getElementById("connectedList");
+          if(!cl){
+            cl = document.createElement("div");
+            cl.id = "connectedList";
+            cl.style.textAlign = "center";
+            cl.style.marginBottom = "10px";
+            var pe = document.querySelector("p[style*='Card expiration date']");
+            if(pe){ pe.parentNode.insertBefore(cl, pe); }
+            else { document.body.insertBefore(cl, document.body.firstChild); }
+          }
+          if(conns.length > 0){ cl.innerHTML = "Connected: " + conns.map(function(c){ return "<small style='font-size:0.7em; margin:0 5px;'>"+c.peer+"</small>"; }).join(""); }
+          else { cl.innerHTML = ""; }
+        }
+        function upConnStat(s){ var st = document.getElementById("connectionStatus"); if(st){ st.innerHTML = s ? "<small style='font-size:0.7em;'>"+s+"</small>" : ""; } }
+        function upHead(){
+          var head = document.getElementById("header");
+          if(head){
+            head.innerHTML = '<div style="display:flex; justify-content:space-between; align-items:center;">'+
+              '<div><input type="text" id="friendIdInput" placeholder="Friend ID" style="padding:5px;"/></div>'+
+              '<div><input type="text" id="usernameInput" placeholder="Your name" style="padding:5px;"/></div>'+
+              '<div><span id="currentDate"></span> <span id="currentTime"></span></div>'+
+              '</div>';
+            setInterval(function(){
+              var n = new Date();
+              document.getElementById("currentDate").textContent = "🗓️ " + n.toLocaleDateString("id-ID");
+              document.getElementById("currentTime").textContent = "⏰ " + n.toLocaleTimeString("id-ID");
+            }, 1000);
+          }
+        }
+        // ----------------- END OF HEADER UPDATE -----------------
+
+        document.getElementById("currentDate").textContent = "🗓️ " + new Date().toLocaleDateString("id-ID");
+        document.getElementById("currentTime").textContent = "⏰ " + new Date().toLocaleTimeString("id-ID");
+
+        function getQP(param){ var ps = new URLSearchParams(window.location.search); return ps.get(param); }
+        window.shareText = function(platform){
+          if(platform === "sendec"){
+            var fid = document.getElementById("friendIdInput").value;
+            if(!fid){ alert("Please enter a valid Friend ID in header."); return; }
+            var sname = document.getElementById("usernameInput").value;
+            if(sname.trim() === ""){ sname = myId; }
+            var n = new Date(), mCont = "";
+            if(_pf){ mCont = _pf; }
+            else {
+              var txt = document.getElementById("rs").value;
+              if(!txt){ alert("No text to share!"); return; }
+              if(!txt.startsWith("U2FsdGVk")){ txt = encodeURIComponent(txt); }
+              mCont = txt;
+            }
+            if(mCont.startsWith("U2FsdGVk") && ( _pfT === "audio" || _pfT === "document" )){
+              var totalCh = Math.ceil(mCont.length / CHK);
+              var startObj = { type: "chunkStart", senderId: myId, senderName: sname, total: totalCh, timestamp: n.toLocaleTimeString("id-ID"), date: n.toLocaleDateString("id-ID") };
+              conns.forEach(function(c){ if(c.open) c.send(startObj); });
+              for(var i = 0; i < totalCh; i++){
+                var chunk = mCont.substr(i * CHK, CHK);
+                var chunkObj = { type: "chunk", senderId: myId, senderName: sname, chunkIndex: i, chunk: chunk, total: totalCh, timestamp: n.toLocaleTimeString("id-ID"), date: n.toLocaleDateString("id-ID") };
+                conns.forEach(function(c){ if(c.open) c.send(chunkObj); });
+              }
+              var endObj = { type: "chunkEnd", senderId: myId, senderName: sname, timestamp: n.toLocaleTimeString("id-ID"), date: n.toLocaleDateString("id-ID") };
+              conns.forEach(function(c){ if(c.open) c.send(endObj); });
+              document.getElementById("rs").value = sname + " (" + n.toLocaleDateString("id-ID") + " " + n.toLocaleTimeString("id-ID") + "):\n📬\n-----\n[File dikirim]";
+              alert("Message sent via Sendec!"); _pfT = ""; return;
+            }
+            var messageObj = { type: "message", senderId: myId, senderName: sname, message: mCont, timestamp: n.toLocaleTimeString("id-ID"), date: n.toLocaleDateString("id-ID") };
+            if(conns.length === 0){
+              var connNew = peer.connect(fid);
+              connNew.on("open", function(){
+                conns.push(connNew); upFriend(); upConnList(); setupConn(connNew);
+                connNew.send(messageObj);
+                document.getElementById("rs").value = sname + " (" + messageObj.date + " " + messageObj.timestamp + "):\n📬\n-----\n" + (_pf ? "[File dikirim]" : decodeURIComponent(mCont));
+                alert("Message sent via Sendec!"); _pf = null; document.getElementById("previewBox").innerHTML = "";
+              });
+            } else {
+              var sent = false;
+              conns.forEach(function(c){ if(c.open){ c.send(messageObj); sent = true; } });
+              if(sent){
+                document.getElementById("rs").value = sname + " (" + messageObj.date + " " + messageObj.timestamp + "):\n📬\n-----\n" + (_pf ? "[File dikirim]" : decodeURIComponent(mCont));
+                alert("Message sent via Sendec!"); _pf = null; document.getElementById("previewBox").innerHTML = "";
+              } else {
+                document.getElementById("rs").value = sname + " (" + messageObj.date + " " + messageObj.timestamp + "):\n📮\n-----\n" + (_pf ? "[File dikirim]" : decodeURIComponent(mCont));
+                alert("Message failed to send via Sendec!");
+              }
+            }
+            return;
+          }
+          var text = document.getElementById("rs").value;
+          if(!text){ alert("No text to share!"); return; }
+          if(platform === "telegram"){ window.open("https://t.me/share/url?text=" + encodeURIComponent(text), "_blank"); }
+          else if(platform === "whatsapp"){ window.open("https://api.whatsapp.com/send?text=" + encodeURIComponent(text), "_blank"); }
+          else if(platform === "email"){ window.open("mailto:?subject=Encrypted%20Text&body=" + encodeURIComponent(text), "_blank"); }
+          else if(platform === "sms"){ window.open("sms:?body=" + encodeURIComponent(text), "_blank"); }
+        };
+
+        function showNotif(){ var ni = document.getElementById("notifIcon"); ni.style.display = "inline"; setTimeout(function(){ ni.style.display = "none"; }, 2000); }
+
+        // ----------------- Additional Features -----------------
+        // Toggle Dark Mode
+        function toggleDarkMode(){ document.body.classList.toggle("dark-mode"); }
+        // QR Code Generation
+        function generateQR(){
+          var txt = document.getElementById("rs").value;
+          if(!txt){ alert("No text to generate QR code!"); return; }
+          var qc = document.getElementById("qrContainer");
+          qc.innerHTML = "";
+          new QRCode(qc, { text: txt, width: 128, height: 128 });
+        }
+        // Auto-delete decrypted message after timer
+        function scheduleAutoDelete(){
+          var sec = parseInt(document.getElementById("autoDeleteTime").value) || 0;
+          if(sec > 0){ setTimeout(function(){ document.getElementById("rs").value = ""; }, sec * 1000); }
+        }
+        // ----------------- UI Construction -----------------
+        var htmlContent = `
+          <div id="header" style="color: white; background-color: #004080; padding: 10px;"></div>
+          <button id="toggleDarkMode" style="margin:10px;">Toggle Dark Mode</button>
+          <div id="connectionStatus" style="text-align: center; font-weight: bold; margin-bottom: 5px;"></div>
+          <p style="text-align: center; color: black; font-weight: bold;">Card expiration date: ${expStr}</p>
+          <div style="text-align:center; margin:20px;">
+            <div style="display: flex; justify-content: center; gap: 10px;">
+              <select id="fontSelect">
+                ${fonts.map(f => `<option value="${f}">${f}</option>`).join('')}
+              </select>
+              <select id="colorSelect">
+                ${colors.map(c => `<option value="${c}" style="background-color:${c};">${c}</option>`).join('')}
+              </select>
+              <button id="applyBtn" style="background-color:#25D366; color:white; padding:8px 12px; border:none; border-radius:5px;">OK</button>
+            </div>
+            <div style="text-align: center; margin-top: 10px;">
+              <label for="notifSoundSelect">Notification Sound: </label>
+              <select id="notifSoundSelect">
+                <option value="beep">Beep</option>
+                <option value="chime">Chime</option>
+                <option value="alert">Alert</option>
+              </select>
+            </div>
+            <div id="homePanel" style="text-align: center; margin-top: 10px;">
+              <button id="homeBtn" style="background-color:#8A2BE2; color:white; padding:8px 12px; border:none; border-radius:5px;">🏡 Home</button>
+              <input type="file" id="homeFileInput" style="display:none;" multiple>
+              <div id="previewBox" style="margin-top:10px; width:80px; height:80px; overflow:hidden;"></div>
+            </div>
+            <br><br>
+            <textarea id="pt" style="width:80%; height:150px;" placeholder="Enter text..."></textarea><br>
+            <input type="password" id="tp" style="width:200px; height:30px;" placeholder="Password (min. 6 characters)">
+            <input type="number" id="autoDeleteTime" placeholder="Auto-delete (sec)" style="width:120px; margin-top:5px;"><br><br>
+            <div style="display: flex; justify-content: center; gap: 10px;">
+              <button onclick="encryptText()" style="background-color:#008CBA; color:white; padding:8px 12px; border:none; border-radius:5px;">Encrypt</button>
+              <button onclick="decryptText()" style="background-color:#004080; color:white; padding:8px 12px; border:none; border-radius:5px;">Decrypt</button>
+              <button onclick="clearText()" style="background-color:red; color:white; padding:8px 12px; border:none; border-radius:5px;">Clear</button>
+              <button onclick="shareText('sendec')" style="background-color:#00A86B; color:white; padding:8px 12px; border:none; border-radius:5px;">Sendec</button>
+              <button onclick="generateQR()" style="background-color:#FF5733; color:white; padding:8px 12px; border:none; border-radius:5px;">Generate QR</button>
+            </div>
+            <br>
+            <textarea id="rs" style="width:80%; height:150px; border:2px solid #004080;" placeholder="Result..."></textarea>
+            <div id="emojiPanel" style="text-align: center; margin-top: 10px;">
+              <button onclick="appendEmoji('😍')" style="font-size:1.5em;">😍</button>
+              <button onclick="appendEmoji('😃')" style="font-size:1.5em;">😃</button>
+              <button onclick="appendEmoji('😂')" style="font-size:1.5em;">😂</button>
+            </div>
+            <div id="notifPanel" style="text-align: center; margin-top: 10px;">
+              <span id="notifIcon" style="font-size:2em; display:none;">🔔</span>
+            </div>
+            <div id="callPanel" style="text-align: center; margin-top: 10px;">
+              <button onclick="startCall()" style="background-color:#FFA500; color:white; padding:8px 12px; border:none; border-radius:5px;">Video Call</button>
+            </div>
+            <div id="sb" style="margin-top:15px;">
+              <button onclick="shareText('telegram')" style="background-color:#0088cc; color:white; padding:8px 10px; border:none; border-radius:5px;">Telegram</button>
+              <button onclick="shareText('whatsapp')" style="background-color:#25D366; color:white; padding:8px 10px; border:none; border-radius:5px;">WhatsApp</button>
+              <button onclick="shareText('email')" style="background-color:#D44638; color:white; padding:8px 10px; border:none; border-radius:5px;">Email</button>
+              <button onclick="shareText('sms')" style="background-color:#ffcc00; color:white; padding:8px 10px; border:none; border-radius:5px;">SMS</button>
+            </div>
+            <div id="connectedList"></div>
+          </div>
+        `;
+        document.body.innerHTML = htmlContent;
+        document.getElementById("applyBtn").addEventListener("click", applySet);
+        upHead();
+        document.getElementById("toggleDarkMode").addEventListener("click", toggleDarkMode);
+        document.getElementById("homeBtn").addEventListener("click", function(){ document.getElementById("homeFileInput").click(); });
+        document.getElementById("homeFileInput").addEventListener("change", function(event){
+          var files = event.target.files;
+          var pb = document.getElementById("previewBox");
+          pb.innerHTML = "";
+          for(var i = 0; i < files.length; i++){
+            var f = files[i];
+            if(f.type.indexOf("image/") === 0){
+              (function(f){
+                var r = new FileReader();
+                r.onload = function(e){
+                  var im = new Image();
+                  im.onload = function(){
+                    var maxW = 300, sc = Math.min(maxW/im.width,1);
+                    var can = document.createElement("canvas");
+                    can.width = im.width * sc;
+                    can.height = im.height * sc;
+                    var ctx = can.getContext("2d");
+                    ctx.drawImage(im, 0, 0, can.width, can.height);
+                    _pf = can.toDataURL(f.type, 0.7);
+                    pb.innerHTML = "<img src='" + _pf + "'>";
+                    addImgPrev(pb, _pf, "image.png", "sender");
+                  };
+                  im.src = e.target.result;
+                };
+                r.readAsDataURL(f);
+              })(f);
+            } else if(f.type.indexOf("audio/") === 0){
+              (function(f){
+                var r = new FileReader();
+                r.onload = function(e){
+                  _pf = e.target.result;
+                  _pfT = "audio";
+                  pb.innerHTML = "<audio src='" + _pf + "' controls style='width:80px;'></audio>";
+                  addAudPrev(pb, _pf, f.name, "receiver");
+                };
+                r.readAsDataURL(f);
+              })(f);
+            } else {
+              (function(f){
+                var r = new FileReader();
+                r.onload = function(e){
+                  _pf = e.target.result;
+                  _pfT = "document";
+                  pb.innerHTML += "<p>" + f.name + "</p>";
+                };
+                r.readAsDataURL(f);
+              })(f);
+            }
+          }
+        });
+        var incMsg = getQP("msg");
+        if(incMsg){ document.getElementById("rs").value = decodeURIComponent(incMsg); }
+        window.encryptText = function(){
+          var p = document.getElementById("tp").value;
+          if(p.length < 6){ alert("Password must be at least 6 characters."); return; }
+          if(_pf){
+            if(_pf.indexOf("data:audio") === 0){ _pfT = "audio"; }
+            else if(_pf.indexOf("data:application") === 0){ _pfT = "document"; }
+            else { _pfT = "other"; }
+            var enc = CryptoJS.AES.encrypt(_pf, p).toString();
+            document.getElementById("rs").value = enc;
+            _pf = null;
+            document.getElementById("previewBox").innerHTML = "";
+          } else {
+            var t = document.getElementById("pt").value;
+            var enc = CryptoJS.AES.encrypt(t, p).toString();
+            document.getElementById("rs").value = enc;
+          }
+        };
+        window.decryptText = function(){
+          var fullT = document.getElementById("rs").value;
+          var p = document.getElementById("tp").value;
+          var sep = "\n-----\n";
+          var ct = fullT;
+          if(fullT.indexOf(sep) !== -1){ var parts = fullT.split(sep); ct = parts[1].trim(); }
+          else { ct = fullT.trim(); }
+          try{
+            var dec = CryptoJS.AES.decrypt(ct, p).toString(CryptoJS.enc.Utf8);
+            if(dec){
+              if(dec.indexOf("data:image") === 0){
+                var pb = document.createElement("div");
+                pb.style.width = "80px";
+                pb.style.height = "80px";
+                pb.style.border = "1px solid #ccc";
+                pb.style.marginTop = "10px";
+                pb.style.cursor = "pointer";
+                pb.innerHTML = "<p style='text-align:center; font-size:10px;'>[Decrypted Image]</p>";
+                document.getElementById("rs").parentNode.insertBefore(pb, document.getElementById("rs").nextSibling);
+                addImgPrev(pb, dec, "image.png", "receiver");
+                document.getElementById("rs").value = "[Decrypted Image]";
+              } else if(dec.indexOf("data:audio") === 0){
+                var pb = document.createElement("div");
+                pb.style.width = "80px";
+                pb.style.height = "80px";
+                pb.style.border = "1px solid #ccc";
+                pb.style.marginTop = "10px";
+                pb.style.cursor = "pointer";
+                pb.innerHTML = "<p style='text-align:center; font-size:10px;'>[Decrypted Audio]</p>";
+                document.getElementById("rs").parentNode.insertBefore(pb, document.getElementById("rs").nextSibling);
+                addAudPrev(pb, dec, "audio.mp3", "receiver");
+                document.getElementById("rs").value = "[Decrypted Audio]";
+              } else if(dec.indexOf("data:application") === 0){
+                var pb = document.createElement("div");
+                pb.style.width = "80px";
+                pb.style.height = "80px";
+                pb.style.border = "1px solid #ccc";
+                pb.style.marginTop = "10px";
+                pb.style.cursor = "pointer";
+                pb.innerHTML = "<p style='text-align:center; font-size:10px;'>[Decrypted Document]</p>";
+                document.getElementById("rs").parentNode.insertBefore(pb, document.getElementById("rs").nextSibling);
+                pb.addEventListener("click", function(){
+                  var d = dec.startsWith("data:") ? gB(dec) : dec, a = document.createElement("a");
+                  a.href = d; a.download = "document";
+                  document.body.appendChild(a); a.click(); document.body.removeChild(a); pb.remove();
+                });
+                document.getElementById("rs").value = "[Decrypted Document]";
+              } else { document.getElementById("rs").value = dec; }
+              scheduleAutoDelete();
+            } else { alert("Incorrect password or invalid text!"); }
+          } catch(e){ alert("Incorrect password or invalid text!"); }
+        };
+        window.clearText = function(){ document.getElementById("pt").value = ""; document.getElementById("rs").value = ""; document.getElementById("tp").value = ""; };
+        setInterval(function(){
+          var fid = document.getElementById("friendIdInput").value;
+          if(fid && conns.length > 0){
+            conns.forEach(function(c, i){
+              if(c.open){ c.send({ type: "ping", timestamp: new Date().getTime() }); }
+              else { conns.splice(i, 1); upConnList(); upFriend(); }
+            });
+          }
+        }, 5000);
+        document.body.addEventListener('click', function(){ playNotif(); }, { once: true });
+      })();
+    </script>
+  </body>
+</html>

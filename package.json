@@ -1,0 +1,20 @@
+{
+  "name": "sendec-app",
+  "version": "1.0.0",
+  "description": "Aplikasi Sendec Secure yang dibangun dengan HTML dan Cordova",
+  "cordova": {
+    "id": "com.example.sendec",
+    "platforms": [
+      "android"
+    ]
+  },
+  "scripts": {
+    "cordova:build": "cordova build android"
+  },
+  "author": "Nama Anda",
+  "license": "MIT",
+  "devDependencies": {
+    "cordova": "^11.0.0",
+    "cordova-android": "^14.0.0"
+  }
+}
