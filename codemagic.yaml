@@ -1,0 +1,15 @@
+workflows:
+  release-workflow:
+    name: Build APK Release
+    environment:
+      flutter: stable
+    scripts:
+      - name: Install dependencies
+        script: flutter pub get
+      - name: Clean previous builds
+        script: flutter clean
+      - name: Build APK with obfuscation
+        script: flutter build apk --release --obfuscate --split-debug-info=build/debug_info
+    artifacts:
+      - build/app/outputs/flutter-apk/app-release.apk
+      - build/debug_info/**/*
