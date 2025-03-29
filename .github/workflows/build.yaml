@@ -3,7 +3,7 @@ name: Build Flutter App
 on:
   push:
     branches:
-      - master  # Ubah ke 'main' jika branch default Anda bernama main
+      - main
 
 jobs:
   build:
