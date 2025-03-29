@@ -31,14 +31,22 @@ jobs:
       - name: Build App Bundle (AAB) with obfuscation
         run: flutter build appbundle --release --obfuscate --split-debug-info=build/debug_info
 
+      - name: List APK output directory
+        run: ls -R build/app/outputs/flutter-apk
+
+      - name: List App Bundle output directory
+        run: ls -R build/app/outputs/bundle/release
+
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v2
         with:
           name: app-release-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: warn
 
       - name: Upload App Bundle Artifact
         uses: actions/upload-artifact@v2
         with:
           name: app-release-aab
           path: build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: warn
