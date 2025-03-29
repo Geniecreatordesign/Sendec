@@ -1,0 +1,44 @@
+name: Build Flutter App
+
+on:
+  push:
+    branches:
+      - master  # Ubah ke 'main' jika branch default Anda bernama main
+
+jobs:
+  build:
+    name: Build APK and App Bundle
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 'stable'
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Clean previous builds
+        run: flutter clean
+
+      - name: Build APK (Release) with obfuscation
+        run: flutter build apk --release --obfuscate --split-debug-info=build/debug_info
+
+      - name: Build App Bundle (AAB) with obfuscation
+        run: flutter build appbundle --release --obfuscate --split-debug-info=build/debug_info
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: app-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Upload App Bundle Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: app-release-aab
+          path: build/app/outputs/bundle/release/app-release.aab
