@@ -32,7 +32,7 @@ jobs:
         run: cordova build android
 
       - name: Upload APK
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v3.1.2
         with:
           name: neonchat-apk
           path: platforms/android/app/build/outputs/apk/debug/app-debug.apk

@@ -1,0 +1,29 @@
+image: node:18
+
+stages:
+  - build
+
+variables:
+  ANDROID_SDK_ROOT: "/sdk"
+  GRADLE_USER_HOME: "$CI_PROJECT_DIR/.gradle"
+
+before_script:
+  - apt-get update && apt-get install -y openjdk-17-jdk unzip wget git
+  - wget https://dl.google.com/android/repository/commandlinetools-linux-8512546_latest.zip -O cmdline-tools.zip
+  - mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
+  - unzip cmdline-tools.zip -d $ANDROID_SDK_ROOT/cmdline-tools
+  - mv $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools $ANDROID_SDK_ROOT/cmdline-tools/latest
+  - yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses
+  - $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2"
+  - npm install -g cordova
+  - cordova platform add android
+  - cordova prepare
+
+build:
+  stage: build
+  script:
+    - cordova build android --release
+  artifacts:
+    paths:
+      - platforms/android/app/build/outputs/apk/release/app-release.apk
+    expire_in: 1 day
