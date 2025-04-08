@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SENDEC CHAT</title>
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: black;
+      color: #0ff;
+      font-family: 'Courier New', monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      box-sizing: border-box;
+    }
+
+    #container {
+      width: 100%;
+      max-width: 500px;
+      height: 100%;
+      padding: 1em;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    input, button, textarea {
+      background: transparent;
+      border: 1px solid #0ff;
+      color: #0ff;
+      font-size: 1.1em;
+      padding: 0.6em;
+      margin: 0.2em 0;
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    input::placeholder {
+      color: #0ff;
+      opacity: 0.5;
+    }
+
+    .small-input {
+      font-size: 0.9em;
+    }
+
+    #chat-box {
+      height: 45%;
+      overflow-y: auto;
+      background: transparent;
+      border: 1px solid #0ff;
+      padding: 0.5em;
+      white-space: pre-wrap;
+      text-align: left;
+      margin-top: 0.2em;
+    }
+
+    .neon-cyan {
+      text-shadow: 0 0 5px #0ff, 0 0 10px #0ff;
+      color: #0ff;
+    }
+
+    .neon-magenta {
+      text-shadow: 0 0 5px #f0f, 0 0 10px #f0f;
+      color: #f0f;
+    }
+
+    .neon-green {
+      text-shadow: 0 0 5px #0f0, 0 0 10px #0f0;
+      color: #0f0;
+    }
+
+    .neon-red {
+      text-shadow: 0 0 5px #f00, 0 0 10px #f00;
+      color: #f00;
+    }
+
+    #action-buttons {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.5em;
+    }
+
+    #msg {
+      height: 3em;
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <div>
+      <h1 class="neon-cyan">SENDEC CHAT</h1>
+      <p>Your ID: <span id="my-id" class="neon-magenta">...</span></p>
+      <p class="neon-green">Date: <span id="current-date"></span> | Time: <span id="current-time"></span></p>
+
+      <input id="username" placeholder="Your Username (e.g. ben)" class="small-input" />
+      <input id="connect-id" placeholder="Enter Friend's Peer ID" class="small-input" />
+      <button id="connect-btn" class="small-input">Connect</button>
+    </div>
+
+    <div id="chat-box"></div>
+
+    <input id="msg" placeholder="Type message..." />
+    <div id="action-buttons">
+      <button onclick="sendMessage()">Send</button>
+      <button onclick="clearChat()" class="neon-red">Clear</button>
+    </div>
+  </div>
+
+  <script>
+    const peer = new Peer(undefined, {
+      host: '0.peerjs.com',
+      port: 443,
+      secure: true
+    });
+
+    let conn;
+    let myUsername = "Me";
+    let friendName = "Friend";
+
+    peer.on('open', id => {
+      document.getElementById('my-id').textContent = id;
+    });
+
+    peer.on('connection', connection => {
+      conn = connection;
+      conn.on('open', () => {
+        myUsername = document.getElementById('username').value || "Me";
+        conn.send({ type: "intro", username: myUsername });
+        setupConnection();
+      });
+    });
+
+    document.getElementById('connect-btn').addEventListener('click', () => {
+      const friendId = document.getElementById('connect-id').value;
+      myUsername = document.getElementById('username').value || "Me";
+      if (!friendId) return alert("Please enter a valid peer ID");
+
+      conn = peer.connect(friendId);
+      conn.on('open', () => {
+        conn.send({ type: "intro", username: myUsername });
+        log(`Connected to ${friendId}`, "me");
+        setupConnection();
+      });
+    });
+
+    function setupConnection() {
+      conn.on('data', data => {
+        if (data.type === "intro") {
+          friendName = data.username;
+          log(`Connected with ${friendName}`, "friend");
+        } else if (data.type === "message") {
+          log(`${friendName}: ${data.message}`, "friend");
+        }
+      });
+
+      conn.on('close', () => log("Connection closed.", "friend"));
+    }
+
+    function sendMessage() {
+      const msg = document.getElementById('msg').value;
+      if (conn && conn.open) {
+        const payload = {
+          type: "message",
+          message: msg
+        };
+        conn.send(payload);
+        log(`${myUsername}: ${msg}`, "me");
+        document.getElementById('msg').value = '';
+      } else {
+        alert("No connection established.");
+      }
+    }
+
+    function log(msg, sender = "me") {
+      const chat = document.getElementById('chat-box');
+      const span = document.createElement('span');
+
+      span.style.color = sender === "me" ? "#66ccff" : "#ffcc66";  // Magenta untuk user1, orange untuk user2
+      span.textContent = msg + "\n";
+      chat.appendChild(span);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    function clearChat() {
+      document.getElementById('chat-box').innerHTML = '';
+    }
+
+    setInterval(() => {
+      const now = new Date();
+      document.getElementById('current-time').textContent = now.toLocaleTimeString();
+      document.getElementById('current-date').textContent = now.toLocaleDateString();
+    }, 1000);
+  </script>
+</body>
+</html>
